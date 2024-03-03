@@ -101,7 +101,7 @@ def load_model():
         settings.top_p = 0.8
         settings.top_a = 0.0
         settings.token_repetition_penalty = 1.05
-        settings.disallow_tokens(tokenizer, [tokenizer.eos_token_id])
+        # settings.disallow_tokens(tokenizer, [tokenizer.eos_token_id])
 
         default_settings = {
             k: getattr(settings, k) for k in dir(settings) if k[:2] != '__'
@@ -121,7 +121,7 @@ def generate_with_streaming(prompt, settings, max_new_tokens):
 
     generator = ExLlamaV2StreamingGenerator(model, cache, tokenizer)
     generator.warmup()
-    generator.set_stop_conditions([])
+    # generator.set_stop_conditions([])
     generator.begin_stream(input_ids, settings)
     generated_tokens = 0
 
