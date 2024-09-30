@@ -1,9 +1,6 @@
-import os
-import sys
-import glob
-import re
-import codecs
-import traceback
+#!/bin/env python3
+import os, sys, glob, re, codecs
+
 import runpod
 from runpod.serverless.modules.rp_logger import RunPodLogger
 from huggingface_hub import snapshot_download
@@ -22,7 +19,6 @@ from exllamav2.generator import (
     ExLlamaV2StreamingGenerator,
     ExLlamaV2Sampler,
 )
-
 
 ESCAPE_SEQUENCE_RE = re.compile(r'''
     ( \\U........      # 8-digit hex escapes
@@ -52,48 +48,56 @@ def decode_escapes(s):
 prompt_prefix = decode_escapes(os.getenv('PROMPT_PREFIX', ''))
 prompt_suffix = decode_escapes(os.getenv('PROMPT_SUFFIX', ''))
 
-
 def load_model():
     global generator, default_settings, tokenizer, model, cache
 
     if not generator:
+        repo_id = os.environ['MODEL_REPO'],
+        revision = os.getenv('MODEL_REVISION', 'main')
+        print(f"Downloading repo id: {repo_id} rev: {revision}")
         model_directory = snapshot_download(
-            repo_id=os.environ['MODEL_REPO'],
-            revision=os.getenv('MODEL_REVISION', 'main')
+            repo_id=repo_id,
+            revision=revision,
         )
 
-        st_pattern = os.path.join(model_directory, '*.safetensors')
-        st_files = glob.glob(st_pattern)
+        #st_pattern = os.path.join(model_directory, '*.safetensors')
+        #st_files = glob.glob(st_pattern)
 
-        if not st_files:
-            raise ValueError(f'No safetensors files found in {model_directory}')
+        #if not st_files:
+        #    raise ValueError(f'No safetensors files found in {model_directory}')
 
-        model_path = st_files[0]
+        #model_path = st_files[0]
 
-        config = ExLlamaV2Config()
-        config.model_dir = model_directory
+
+        config = ExLlamaV2Config(model_directory)
         config.prepare()
+        config.arch_compat_overrides()
 
         gpu_split = os.getenv('GPU_SPLIT', '')
-
         if gpu_split:
             config.set_auto_map(gpu_split)
             config.gpu_peer_fix = True
 
-        alpha_value = int(os.getenv('ALPHA_VALUE', '1'))
-        config.max_seq_len = int(os.getenv('MAX_SEQ_LEN', '2048'))
+        max_seq_len = os.getenv('MAX_SEQ_LEN', '')
+        if max_seq_len:
+            config.max_seq_len = int(max_seq_len)
 
-        if alpha_value != 1:
-            config.alpha_value = alpha_value
+        alpha_value = os.getenv('ALPHA_VALUE', '')
+        if alpha_value:
+            config.alpha_value = int(alpha_value)
             config.calculate_rotary_embedding_base()
 
         model = ExLlamaV2(config)
-        logger.info(f'Loading model: {model_path}')
+        logger.info(f'Loading model: {model_directory}')
         cache = ExLlamaV2Cache(model, lazy=True)
         model.load_autosplit(cache)
 
         tokenizer = ExLlamaV2Tokenizer(config)
-        generator = ExLlamaV2BaseGenerator(model, cache, tokenizer)
+        generator = ExLlamaV2BaseGenerator(
+            model = model,
+            cache = cache,
+            tokenizer = tokenizer,
+        )
 
         settings = ExLlamaV2Sampler.Settings()
         settings.temperature = 0.85
@@ -116,9 +120,6 @@ def generate_with_streaming(prompt, settings, max_new_tokens):
     # Tokenizing the input
     input_ids = tokenizer.encode(prompt)
 
-    # Calculate number of tokens in the prompt
-    prompt_tokens = input_ids.shape[-1]
-
     generator = ExLlamaV2StreamingGenerator(model, cache, tokenizer)
     generator.warmup()
     # generator.set_stop_conditions([])
@@ -136,7 +137,7 @@ def generate_with_streaming(prompt, settings, max_new_tokens):
             break
 
 
-def handler(job: dict) -> Union[dict, str, Generator[str, None, None]]:
+async def handler(job: dict):
     global generator, default_settings
 
     try:
@@ -172,11 +173,7 @@ def handler(job: dict) -> Union[dict, str, Generator[str, None, None]]:
             yield output_text[len(prompt):]
     except Exception as e:
         logger.error(f'An exception was raised: {e}')
-
-        return {
-            'error': traceback.format_exc(),
-            'refresh_worker': True
-        }
+        raise e
 
 
 if __name__ == '__main__':
